@@ -6,7 +6,7 @@ dotenv.config();
 const provider = (process.env.LLM_PROVIDER || 'mock').toLowerCase();
 const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || 'mock';
 const customUrl = process.env.LLM_API_URL || '';
-const modelName = process.env.LLM_MODEL || (provider === 'anthropic' ? 'claude-3-5-sonnet-latest' : 'gpt-4o-mini');
+const modelName = process.env.LLM_MODEL || (provider === 'gemini' ? 'gemini-2.5-flash' : provider === 'anthropic' ? 'claude-3-5-sonnet-latest' : 'gpt-4o-mini');
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -37,6 +37,8 @@ ${context || 'No knowledge base context found.'}`;
   try {
     if (provider === 'anthropic') {
       await streamAnthropicResponse(systemPrompt, prompt, history, onChunk);
+    } else if (provider === 'gemini') {
+      await streamGeminiResponse(systemPrompt, prompt, history, onChunk);
     } else {
       // Handles 'openai' and 'custom' (OpenAI-compatible) providers
       await streamOpenAICompatibleResponse(systemPrompt, prompt, history, onChunk);
@@ -190,6 +192,86 @@ async function streamAnthropicResponse(
           }
         } catch (e) {
           // Ignore parsing errors
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Streams from Google Gemini API endpoint.
+ */
+async function streamGeminiResponse(
+  systemPrompt: string,
+  prompt: string,
+  history: ChatMessage[],
+  onChunk: (chunk: string) => void
+): Promise<void> {
+  // Use custom URL or default Gemini API endpoint
+  // Using alt=sse parameters turns Gemini stream responses into standard event-stream text format!
+  const url = customUrl || `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${apiKey}`;
+
+  // Map messages to Gemini API format
+  const contents = [
+    ...history.map(msg => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: msg.content }]
+    })),
+    {
+      role: 'user',
+      parts: [{ text: prompt }]
+    }
+  ];
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents,
+      generationConfig: {
+        responseMimeType: 'text/plain'
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini responded with status ${response.status}: ${errorText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Response body reader is null');
+
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const cleaned = line.trim();
+      if (!cleaned) continue;
+
+      if (cleaned.startsWith('data: ')) {
+        try {
+          const rawData = cleaned.slice(6);
+          const parsed = JSON.parse(rawData);
+          const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          if (chunk) {
+            onChunk(chunk);
+          }
+        } catch (e) {
+          // Ignore parsing errors on partial buffers
         }
       }
     }
