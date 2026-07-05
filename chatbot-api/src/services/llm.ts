@@ -2,7 +2,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const apiKey = process.env.OPENAI_API_KEY || 'mock';
+// Load LLM configuration with intelligent defaults
+const provider = (process.env.LLM_PROVIDER || 'mock').toLowerCase();
+const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || 'mock';
+const customUrl = process.env.LLM_API_URL || '';
+const modelName = process.env.LLM_MODEL || (provider === 'anthropic' ? 'claude-3-5-sonnet-latest' : 'gpt-4o-mini');
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -10,11 +14,7 @@ export interface ChatMessage {
 }
 
 /**
- * Streams the response from the LLM or mock generator.
- * @param prompt The user's input query
- * @param context The retrieved RAG context
- * @param history Recent conversation messages
- * @param onChunk Callback to execute for every text chunk
+ * Streams the response from the LLM based on provider selection in environment variables.
  */
 export async function streamLLMResponse(
   prompt: string,
@@ -29,74 +29,170 @@ If the context does not contain the answer, politely tell the user you don't kno
 Retrieved Context:
 ${context || 'No knowledge base context found.'}`;
 
-  // If mock mode or API key not set, generate mock response based on RAG context
-  if (apiKey === 'mock') {
+  if (provider === 'mock') {
     await simulateMockStreaming(prompt, context, onChunk);
     return;
   }
 
   try {
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      ...history.map(msg => ({ role: msg.role, content: msg.content })),
-      { role: 'user', content: prompt }
-    ];
-
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages,
-        stream: true
-      })
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`OpenAI API responded with status ${response.status}: ${errorText}`);
+    if (provider === 'anthropic') {
+      await streamAnthropicResponse(systemPrompt, prompt, history, onChunk);
+    } else {
+      // Handles 'openai' and 'custom' (OpenAI-compatible) providers
+      await streamOpenAICompatibleResponse(systemPrompt, prompt, history, onChunk);
     }
+  } catch (error) {
+    console.error(`Error calling LLM provider (${provider}), falling back to mock:`, error);
+    await simulateMockStreaming(prompt, context, onChunk);
+  }
+}
 
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('Response body reader is null');
-    }
+/**
+ * Streams from standard OpenAI or OpenAI-compatible (custom) gateways.
+ */
+async function streamOpenAICompatibleResponse(
+  systemPrompt: string,
+  prompt: string,
+  history: ChatMessage[],
+  onChunk: (chunk: string) => void
+): Promise<void> {
+  // Determine endpoint
+  const url = customUrl || 'https://api.openai.com/v1/chat/completions';
+  
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.map(msg => ({ role: msg.role, content: msg.content })),
+    { role: 'user', content: prompt }
+  ];
 
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: modelName,
+      messages,
+      stream: true
+    })
+  });
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`LLM provider responded with status ${response.status}: ${errorText}`);
+  }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Response body reader is null');
 
-      for (const line of lines) {
-        const cleaned = line.trim();
-        if (!cleaned) continue;
-        if (cleaned === 'data: [DONE]') continue;
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
 
-        if (cleaned.startsWith('data: ')) {
-          try {
-            const parsed = JSON.parse(cleaned.slice(6));
-            const chunk = parsed.choices?.[0]?.delta?.content || '';
-            if (chunk) {
-              onChunk(chunk);
-            }
-          } catch (e) {
-            // Ignore parse errors on partial streams
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const cleaned = line.trim();
+      if (!cleaned) continue;
+      if (cleaned === 'data: [DONE]') continue;
+
+      if (cleaned.startsWith('data: ')) {
+        try {
+          const parsed = JSON.parse(cleaned.slice(6));
+          const chunk = parsed.choices?.[0]?.delta?.content || '';
+          if (chunk) {
+            onChunk(chunk);
           }
+        } catch (e) {
+          // Ignore parsing errors of partial chunks
         }
       }
     }
-  } catch (error) {
-    console.error('Error calling OpenAI API, falling back to mock:', error);
-    await simulateMockStreaming(prompt, context, onChunk);
+  }
+}
+
+/**
+ * Streams from Anthropic (Claude) API endpoint.
+ */
+async function streamAnthropicResponse(
+  systemPrompt: string,
+  prompt: string,
+  history: ChatMessage[],
+  onChunk: (chunk: string) => void
+): Promise<void> {
+  const url = customUrl || 'https://api.anthropic.com/v1/messages';
+
+  // Anthropic messages format mapping
+  const messages = [
+    ...history.map(msg => ({ 
+      role: msg.role === 'assistant' ? 'assistant' as const : 'user' as const, 
+      content: msg.content 
+    })),
+    { role: 'user' as const, content: prompt }
+  ];
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: modelName,
+      system: systemPrompt,
+      messages,
+      stream: true,
+      max_tokens: 1024
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Anthropic responded with status ${response.status}: ${errorText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Response body reader is null');
+
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    let currentEvent = '';
+
+    for (const line of lines) {
+      const cleaned = line.trim();
+      if (!cleaned) continue;
+
+      if (cleaned.startsWith('event: ')) {
+        currentEvent = cleaned.slice(7);
+      } else if (cleaned.startsWith('data: ')) {
+        try {
+          const rawData = cleaned.slice(6);
+          const parsed = JSON.parse(rawData);
+          
+          if (currentEvent === 'content_block_delta' && parsed.delta?.text) {
+            onChunk(parsed.delta.text);
+          }
+        } catch (e) {
+          // Ignore parsing errors
+        }
+      }
+    }
   }
 }
 
@@ -109,7 +205,6 @@ async function simulateMockStreaming(
   onChunk: (chunk: string) => void
 ): Promise<void> {
   let responseText = '';
-
   const lowerPrompt = prompt.toLowerCase();
   
   if (context) {
@@ -126,17 +221,15 @@ async function simulateMockStreaming(
     } else if (lowerPrompt.includes('diet') || lowerPrompt.includes('eat') || lowerPrompt.includes('food')) {
       responseText = "For a healthy diet, we suggest focusing on whole grains, vegetables, fresh fruits, lean proteins, and healthy fats. Remember to limit processed foods, added sugars, and saturated fats, and aim to drink at least 8 glasses of water a day.";
     } else {
-      // General fallback based on RAG context
       responseText = `Based on your company documents: \n\n${context}\n\nIs there anything specific I can help clarify?`;
     }
   } else {
     responseText = "Hello! I am your AI assistant. I couldn't find any specific documents relating to your query in your tenant's knowledge base. Please let me know how I can help you, or ask about password resets, VPN, printers, flu care, or appointments.";
   }
 
-  // Stream text character-by-character or word-by-word with delay
   const words = responseText.split(' ');
   for (const word of words) {
     onChunk(word + ' ');
-    await new Promise(resolve => setTimeout(resolve, 60)); // typing speed simulation
+    await new Promise(resolve => setTimeout(resolve, 60));
   }
 }

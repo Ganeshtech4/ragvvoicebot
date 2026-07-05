@@ -34,6 +34,10 @@ services:
       - DATABASE_URL=postgresql://voice_rag_user:voice_rag_password@postgres:5432/voice_rag_db
       - REDIS_URL=redis://redis:6379
       - OPENAI_API_KEY=${OPENAI_API_KEY:-mock}
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+      - LLM_API_KEY=${LLM_API_KEY:-mock}
+      - LLM_API_URL=${LLM_API_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
     ports:
       - "5001:5001"
     depends_on:
@@ -51,6 +55,15 @@ services:
       - PORT=5002
       - CHATBOT_API_URL=http://chatbot-api:5001
       - OPENAI_API_KEY=${OPENAI_API_KEY:-mock}
+      - STT_PROVIDER=${STT_PROVIDER:-mock}
+      - STT_API_KEY=${STT_API_KEY:-mock}
+      - STT_API_URL=${STT_API_URL:-}
+      - STT_MODEL=${STT_MODEL:-}
+      - TTS_PROVIDER=${TTS_PROVIDER:-mock}
+      - TTS_API_KEY=${TTS_API_KEY:-mock}
+      - TTS_API_URL=${TTS_API_URL:-}
+      - TTS_MODEL=${TTS_MODEL:-}
+      - TTS_VOICE=${TTS_VOICE:-}
     ports:
       - "5002:5002"
     depends_on:

@@ -4,9 +4,11 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const apiKey = process.env.OPENAI_API_KEY || 'mock';
+const provider = (process.env.STT_PROVIDER || 'mock').toLowerCase();
+const apiKey = process.env.STT_API_KEY || process.env.OPENAI_API_KEY || 'mock';
+const customUrl = process.env.STT_API_URL || '';
+const modelName = process.env.STT_MODEL || 'whisper-1';
 
-// A pool of mock queries to rotate through for easy end-to-end testing in mock mode
 const mockQueries = [
   "How do I reset my password?",
   "What is the company VPN configuration?",
@@ -19,23 +21,19 @@ const mockQueries = [
 let queryIndex = 0;
 
 /**
- * Transcribes audio buffer to text.
- * @param audioBuffer The raw audio data
- * @param mimeType The audio mime type (e.g. audio/webm, audio/wav)
+ * Transcribes audio buffer to text using configurable STT API endpoint.
  */
 export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
-  if (apiKey === 'mock') {
+  if (provider === 'mock') {
     return getNextMockQuery();
   }
 
   try {
-    // Write buffer to a temp file for the OpenAI API
     const tempDir = path.join(__dirname, '../../temp');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
     
-    // Determine extension based on mimeType
     let ext = 'webm';
     if (mimeType.includes('wav')) ext = 'wav';
     else if (mimeType.includes('ogg')) ext = 'ogg';
@@ -45,13 +43,15 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
     const tempFilePath = path.join(tempDir, `temp_audio_${Date.now()}.${ext}`);
     fs.writeFileSync(tempFilePath, audioBuffer);
 
-    // Call OpenAI Whisper API using native fetch and FormData
+    // Call API using FormData (Whisper-compatible format)
+    const url = customUrl || 'https://api.openai.com/v1/audio/transcriptions';
+    
     const formData = new FormData();
     const fileBlob = new Blob([audioBuffer], { type: mimeType });
     formData.append('file', fileBlob, `audio.${ext}`);
-    formData.append('model', 'whisper-1');
+    formData.append('model', modelName);
 
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`
@@ -70,13 +70,13 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`Whisper API responded with status ${response.status}: ${errText}`);
+      throw new Error(`STT API responded with status ${response.status}: ${errText}`);
     }
 
     const data = await response.json() as { text: string };
     return data.text || '';
   } catch (error) {
-    console.error('STT Transcription error, falling back to mock:', error);
+    console.error(`STT Transcription error (${provider}), falling back to mock:`, error);
     return getNextMockQuery();
   }
 }
