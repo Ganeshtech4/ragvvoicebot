@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: voice-rag-postgres
+    environment:
+      POSTGRES_DB: voice_rag_db
+      POSTGRES_USER: voice_rag_user
+      POSTGRES_PASSWORD: voice_rag_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - voice-rag-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: voice-rag-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - voice-rag-network
+
+  chatbot-api:
+    build:
+      context: ./chatbot-api
+      dockerfile: Dockerfile
+    container_name: voice-rag-chatbot-api
+    environment:
+      - PORT=5001
+      - DATABASE_URL=postgresql://voice_rag_user:voice_rag_password@postgres:5432/voice_rag_db
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-mock}
+    ports:
+      - "5001:5001"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - voice-rag-network
+
+  voice-gateway:
+    build:
+      context: ./voice-gateway
+      dockerfile: Dockerfile
+    container_name: voice-rag-voice-gateway
+    environment:
+      - PORT=5002
+      - CHATBOT_API_URL=http://chatbot-api:5001
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-mock}
+    ports:
+      - "5002:5002"
+    depends_on:
+      - chatbot-api
+    networks:
+      - voice-rag-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: voice-rag-frontend
+    ports:
+      - "3000:3000"
+    networks:
+      - voice-rag-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: voice-rag-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - voice-gateway
+      - chatbot-api
+    networks:
+      - voice-rag-network
+
+volumes:
+  pgdata:
+
+networks:
+  voice-rag-network:
+    driver: bridge

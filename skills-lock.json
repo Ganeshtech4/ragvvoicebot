@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "skills": {
+    "byted-viking-developer": {
+      "source": "skills.volces.com",
+      "sourceType": "well-known",
+      "computedHash": "87b5058a17c2eb9ee274f8405de2a75c4529dc5f56faae8546241d3cd3989cf1"
+    },
+    "voice-ai-integration": {
+      "source": "shengwang-community/skills",
+      "sourceType": "github",
+      "skillPath": "skills/voice-ai-integration/SKILL.md",
+      "computedHash": "b21cb0e947fdaba4325fa0fef83e68938a13c8a9c741904931a1afbf39bdf85f"
+    }
+  }
+}
