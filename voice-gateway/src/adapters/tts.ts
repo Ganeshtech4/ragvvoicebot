@@ -16,22 +16,40 @@ export async function synthesizeSpeech(text: string): Promise<Buffer> {
     return generateMockVoiceWAV(text);
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
   try {
     const url = customUrl || 'https://api.openai.com/v1/audio/speech';
+    
+    let bodyObj: any;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
+    if (provider === 'custom') {
+      bodyObj = {
+        text,
+        voice: voiceName || undefined
+      };
+    } else {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+      bodyObj = {
         model: modelName,
         input: text,
         voice: voiceName,
         response_format: 'mp3'
-      })
+      };
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(bodyObj),
+      signal: controller.signal
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errText = await response.text();
@@ -40,8 +58,13 @@ export async function synthesizeSpeech(text: string): Promise<Buffer> {
 
     const arrayBuffer = await response.arrayBuffer();
     return Buffer.from(arrayBuffer);
-  } catch (error) {
-    console.error(`TTS Synthesis error (${provider}), falling back to synthesized WAV:`, error);
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      console.error(`TTS Synthesis error (${provider}): request timed out.`);
+    } else {
+      console.error(`TTS Synthesis error (${provider}):`, error.message || error);
+    }
     return generateMockVoiceWAV(text);
   }
 }

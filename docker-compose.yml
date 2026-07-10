@@ -66,6 +66,8 @@ services:
       - TTS_VOICE=${TTS_VOICE:-}
     ports:
       - "5002:5002"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - chatbot-api
     networks:
@@ -78,6 +80,28 @@ services:
     container_name: voice-rag-frontend
     ports:
       - "3000:3000"
+    networks:
+      - voice-rag-network
+
+  whisper-service:
+    build:
+      context: .
+      dockerfile: ./services/whisper-service/Dockerfile
+    container_name: voice-rag-whisper-service
+    ports:
+      - "8001:8001"
+    volumes:
+      - whisper-cache:/root/.cache/huggingface
+    networks:
+      - voice-rag-network
+
+  tts-service:
+    build:
+      context: .
+      dockerfile: ./services/tts-service/Dockerfile
+    container_name: voice-rag-tts-service
+    ports:
+      - "8002:8002"
     networks:
       - voice-rag-network
 
@@ -97,6 +121,7 @@ services:
 
 volumes:
   pgdata:
+  whisper-cache:
 
 networks:
   voice-rag-network:

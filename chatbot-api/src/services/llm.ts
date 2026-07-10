@@ -8,6 +8,13 @@ const apiKey = process.env.LLM_API_KEY || process.env.OPENAI_API_KEY || 'mock';
 const customUrl = process.env.LLM_API_URL || '';
 const modelName = process.env.LLM_MODEL || (provider === 'gemini' ? 'gemini-2.5-flash' : provider === 'anthropic' ? 'claude-3-5-sonnet-latest' : 'gpt-4o-mini');
 
+console.log('\n===== LLM SERVICE INITIALIZATION =====');
+console.log(`Selected Provider: ${provider.toUpperCase()}`);
+console.log(`Selected Model: ${modelName}`);
+console.log(`Gemini API Key Present: ${apiKey && apiKey !== 'mock' && apiKey.trim().length > 0 ? 'YES' : 'NO'}`);
+console.log(`Gemini Client Initialized Successfully: ${provider === 'gemini' ? 'YES' : 'N/A'}`);
+console.log('======================================\n');
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -29,23 +36,39 @@ If the context does not contain the answer, politely tell the user you don't kno
 Retrieved Context:
 ${context || 'No knowledge base context found.'}`;
 
-  if (provider === 'mock') {
-    await simulateMockStreaming(prompt, context, onChunk);
-    return;
-  }
+  console.log('\n================== LLM EXECUTION FLOW ==================');
+  console.log(`[LLM Provider] : ${provider.toUpperCase()}`);
+  console.log(`[LLM Model]    : ${modelName}`);
+  console.log(`[User Prompt]  : "${prompt}"`);
+  console.log(`[RAG Context]  : ${context ? `"${context.replace(/\n/g, ' ')}"` : 'No context retrieved.'}`);
+  console.log(`[Chat History] : ${history.length} message(s)`);
+  console.log('--------------------------------------------------------');
+
+  let fullResponse = '';
+  const loggingOnChunk = (chunk: string) => {
+    fullResponse += chunk;
+    onChunk(chunk);
+  };
 
   try {
-    if (provider === 'anthropic') {
-      await streamAnthropicResponse(systemPrompt, prompt, history, onChunk);
+    if (provider === 'mock') {
+      await simulateMockStreaming(prompt, context, loggingOnChunk);
+    } else if (provider === 'anthropic') {
+      await streamAnthropicResponse(systemPrompt, prompt, history, loggingOnChunk);
     } else if (provider === 'gemini') {
-      await streamGeminiResponse(systemPrompt, prompt, history, onChunk);
+      await streamGeminiResponse(systemPrompt, prompt, history, loggingOnChunk);
     } else {
       // Handles 'openai' and 'custom' (OpenAI-compatible) providers
-      await streamOpenAICompatibleResponse(systemPrompt, prompt, history, onChunk);
+      await streamOpenAICompatibleResponse(systemPrompt, prompt, history, loggingOnChunk);
     }
+
+    console.log(`[LLM Response] : "${fullResponse}"`);
+    console.log('========================================================\n');
   } catch (error) {
     console.error(`Error calling LLM provider (${provider}), falling back to mock:`, error);
-    await simulateMockStreaming(prompt, context, onChunk);
+    await simulateMockStreaming(prompt, context, loggingOnChunk);
+    console.log(`[LLM Response (Fallback)]: "${fullResponse}"`);
+    console.log('========================================================\n');
   }
 }
 
@@ -207,6 +230,10 @@ async function streamGeminiResponse(
   history: ChatMessage[],
   onChunk: (chunk: string) => void
 ): Promise<void> {
+  if (!apiKey || apiKey === 'mock') {
+    throw new Error('Invalid Gemini API Key. Please configure LLM_API_KEY in your environment variables.');
+  }
+
   // Use custom URL or default Gemini API endpoint
   // Using alt=sse parameters turns Gemini stream responses into standard event-stream text format!
   const url = customUrl || `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?alt=sse&key=${apiKey}`;
@@ -223,58 +250,87 @@ async function streamGeminiResponse(
     }
   ];
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: systemPrompt }]
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
       },
-      contents,
-      generationConfig: {
-        responseMimeType: 'text/plain'
-      }
-    })
-  });
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: systemPrompt }]
+        },
+        contents,
+        generationConfig: {
+          responseMimeType: 'text/plain'
+        }
+      }),
+      signal: controller.signal
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini responded with status ${response.status}: ${errorText}`);
-  }
+    clearTimeout(timeoutId);
 
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('Response body reader is null');
+    if (response.status === 400 || response.status === 403 || response.status === 401) {
+      const errText = await response.text();
+      throw new Error(`Gemini API authorization/validation failed (Status ${response.status}): ${errText}`);
+    }
 
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Gemini responded with status ${response.status}: ${errorText}`);
+    }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('Response body reader is null');
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
 
-    for (const line of lines) {
-      const cleaned = line.trim();
-      if (!cleaned) continue;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-      if (cleaned.startsWith('data: ')) {
-        try {
-          const rawData = cleaned.slice(6);
-          const parsed = JSON.parse(rawData);
-          const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          if (chunk) {
-            onChunk(chunk);
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const cleaned = line.trim();
+        if (!cleaned) continue;
+
+        if (cleaned.startsWith('data: ')) {
+          try {
+            const rawData = cleaned.slice(6);
+            const parsed = JSON.parse(rawData);
+            
+            // Check if Gemini returned error block in the response JSON
+            if (parsed.error) {
+              throw new Error(`Gemini API Error: ${parsed.error.message || JSON.stringify(parsed.error)}`);
+            }
+            
+            const chunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (chunk) {
+              onChunk(chunk);
+            }
+          } catch (e) {
+            // Re-throw parsed API errors
+            if (e instanceof Error && e.message.startsWith('Gemini API Error')) {
+              throw e;
+            }
+            // Ignore partial JSON parsing errors
           }
-        } catch (e) {
-          // Ignore parsing errors on partial buffers
         }
       }
     }
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Gemini API call timed out after 15 seconds.');
+    }
+    throw error;
   }
 }
 

@@ -7,12 +7,14 @@ import dotenv from 'dotenv';
 import { transcribeAudio } from './adapters/stt';
 import { synthesizeSpeech } from './adapters/tts';
 import { sessionManager } from './services/sessionManager';
+import { MockChatProvider, ChatProvider } from './adapters/chat';
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 5002;
 const chatbotApiUrl = process.env.CHATBOT_API_URL || 'http://localhost:5001';
+const chatProvider: ChatProvider = new MockChatProvider(chatbotApiUrl);
 
 app.use(cors());
 app.use(express.json());
@@ -118,10 +120,16 @@ wss.on('connection', (ws: WebSocket) => {
           session.audioChunks = []; // Clear chunk history
 
           // 2. Transcribe Audio (STT)
-          console.log(`Transcribing audio buffer of size ${audioBuffer.length} bytes...`);
+          console.log(`\n--- [FLOW START] Webm Audio Stream Completed (${audioBuffer.length} bytes) ---`);
+          console.log(`[STT Request]   : Sending audio buffer to STT provider...`);
           const userTranscript = await transcribeAudio(audioBuffer, 'audio/webm');
           
-          if (!session.isProcessing) return; // session interrupted
+          if (!session.isProcessing) {
+            console.log(`[FLOW ABORT]   : Session interrupted during STT.`);
+            return;
+          }
+
+          console.log(`[STT Output]    : User Transcript -> "${userTranscript}"`);
 
           // Send transcript of user speech
           ws.send(JSON.stringify({
@@ -132,32 +140,21 @@ wss.on('connection', (ws: WebSocket) => {
           }));
 
           if (!userTranscript.trim()) {
+            console.log(`[FLOW END]     : Empty transcript returned.`);
             ws.send(JSON.stringify({ type: 'status', status: 'ready' }));
             session.isProcessing = false;
             return;
           }
 
-          // 3. Contact Chatbot API
-          console.log(`Sending query to chatbot-api: "${userTranscript}"`);
-          const chatResponse = await fetch(`${chatbotApiUrl}/chat`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              message: userTranscript,
-              tenantId: session.tenantId,
-              userId: session.userId,
-              sessionId: session.sessionId
-            })
+          // 3. Contact Chat Provider
+          console.log(`[Chat Request]  : Sending transcript to ChatProvider...`);
+          const { stream, sessionId: returnedSessionId } = await chatProvider.sendChat({
+            message: userTranscript,
+            tenantId: session.tenantId,
+            userId: session.userId,
+            sessionId: session.sessionId || undefined
           });
 
-          if (!chatResponse.ok) {
-            throw new Error(`Chatbot API error: ${chatResponse.statusText}`);
-          }
-
-          // Read headers to capture/update Session ID
-          const returnedSessionId = chatResponse.headers.get('X-Session-ID');
           if (returnedSessionId && !session.sessionId) {
             session.sessionId = returnedSessionId;
             ws.send(JSON.stringify({
@@ -167,7 +164,7 @@ wss.on('connection', (ws: WebSocket) => {
           }
 
           // Stream the chat response body and split it into sentences for low latency TTS
-          const reader = chatResponse.body?.getReader();
+          const reader = stream.getReader();
           if (!reader) {
             throw new Error('Chatbot response reader is undefined');
           }
@@ -181,7 +178,7 @@ wss.on('connection', (ws: WebSocket) => {
             const { done, value } = await reader.read();
             if (done) break;
             if (!session.isProcessing) {
-              // User interrupted the session (barge-in)
+              console.log(`[FLOW INTERRUPT]: User interrupted assistant during LLM stream (Barge-in).`);
               await reader.cancel();
               return;
             }
@@ -209,7 +206,7 @@ wss.on('connection', (ws: WebSocket) => {
 
               if (sentence.length > 2) {
                 // Synthesize speech for this sentence and stream immediately to client
-                console.log(`Synthesizing sentence: "${sentence}"`);
+                console.log(`[TTS Input]     : Synthesizing Sentence Chunk -> "${sentence}"`);
                 try {
                   const speechBuffer = await synthesizeSpeech(sentence);
                   if (session.isProcessing) {
@@ -231,7 +228,7 @@ wss.on('connection', (ws: WebSocket) => {
 
           // Synthesize any remaining text in the buffer
           if (sentenceBuffer.trim().length > 0 && session.isProcessing) {
-            console.log(`Synthesizing final sentence: "${sentenceBuffer}"`);
+            console.log(`[TTS Final Input]: Synthesizing Final Sentence Fragment -> "${sentenceBuffer}"`);
             try {
               const speechBuffer = await synthesizeSpeech(sentenceBuffer);
               ws.send(JSON.stringify({
@@ -251,6 +248,9 @@ wss.on('connection', (ws: WebSocket) => {
             text: '',
             isFinal: true
           }));
+
+          console.log(`[FLOW SUCCESS]  : Fully displayed to user -> "${fullText}"`);
+          console.log('--- [FLOW END] ---\n');
 
           ws.send(JSON.stringify({ type: 'status', status: 'ready' }));
           session.isProcessing = false;

@@ -28,8 +28,10 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
     return getNextMockQuery();
   }
 
+  const tempDir = path.join(__dirname, '../../temp');
+  let tempFilePath = '';
+
   try {
-    const tempDir = path.join(__dirname, '../../temp');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
@@ -40,7 +42,7 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
     else if (mimeType.includes('mp3')) ext = 'mp3';
     else if (mimeType.includes('m4a')) ext = 'm4a';
 
-    const tempFilePath = path.join(tempDir, `temp_audio_${Date.now()}.${ext}`);
+    tempFilePath = path.join(tempDir, `temp_audio_${Date.now()}.${ext}`);
     fs.writeFileSync(tempFilePath, audioBuffer);
 
     // Call API using FormData (Whisper-compatible format)
@@ -49,23 +51,29 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
     const formData = new FormData();
     const fileBlob = new Blob([audioBuffer], { type: mimeType });
     formData.append('file', fileBlob, `audio.${ext}`);
-    formData.append('model', modelName);
+    
+    if (provider !== 'custom') {
+      formData.append('model', modelName);
+    }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: formData
-    });
+    const headers: Record<string, string> = {};
+    if (provider !== 'custom' && apiKey && apiKey !== 'mock') {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
 
-    // Cleanup temp file
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
+    let response;
     try {
-      if (fs.existsSync(tempFilePath)) {
-        fs.unlinkSync(tempFilePath);
-      }
-    } catch (e) {
-      console.error('Error cleaning up temp audio file:', e);
+      response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: formData,
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (!response.ok) {
@@ -75,9 +83,21 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
 
     const data = await response.json() as { text: string };
     return data.text || '';
-  } catch (error) {
-    console.error(`STT Transcription error (${provider}), falling back to mock:`, error);
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      console.error(`STT Transcription error (${provider}): request timed out.`);
+    } else {
+      console.error(`STT Transcription error (${provider}):`, error.message || error);
+    }
     return getNextMockQuery();
+  } finally {
+    try {
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+    } catch (e) {
+      console.error('Error cleaning up temp audio file:', e);
+    }
   }
 }
 

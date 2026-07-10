@@ -68,7 +68,7 @@ export default function VoiceInterface({
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    const wsUrl = `${protocol}//${host}/ws`;
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || (window.location.hostname === 'localhost' ? `${protocol}//localhost:5002/ws` : `${protocol}//${host}/ws`);
 
     console.log(`Connecting to WebSocket: ${wsUrl}`);
     const ws = new WebSocket(wsUrl);

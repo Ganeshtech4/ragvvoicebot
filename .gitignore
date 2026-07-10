@@ -33,3 +33,7 @@ voice-gateway/temp/
 *.njsproj
 *.sln
 *.sw?
+
+# Temporary files
+~$*
+*.tmp
