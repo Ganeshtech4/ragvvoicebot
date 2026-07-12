@@ -68,3 +68,22 @@ async def rag_stream(payload: RAGStreamRequest):
 async def get_embeddings_endpoint(payload: EmbeddingRequest):
     vector = compute_embedding(payload.text)
     return {"embedding": vector}
+
+from tts.synthesizer import synthesize_speech
+from fastapi import Response
+import os
+
+class TTSRequest(BaseModel):
+    text: str
+
+@router.post("/tts")
+@router.post("/api/v1/tts")
+async def tts_endpoint(payload: TTSRequest):
+    try:
+        audio_content = await synthesize_speech(payload.text)
+        provider = os.getenv("TTS_PROVIDER", "mock").lower()
+        media_type = "audio/wav" if provider == "mock" else "audio/mpeg"
+        return Response(content=audio_content, media_type=media_type)
+    except Exception as e:
+        logger.error(f"TTS endpoint error: {e}")
+        return Response(content=str(e), status_code=500)

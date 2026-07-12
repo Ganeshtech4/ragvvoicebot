@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, User, LogOut, MessageSquare, Bot, Key, FileText, Database } from 'lucide-react';
+import { Send, User, LogOut, MessageSquare, Bot, Key, FileText, Database, Volume2 } from 'lucide-react';
 import VoiceInterface from '../components/VoiceInterface';
 
 interface Message {
@@ -240,6 +240,31 @@ export default function Dashboard() {
         });
         return updated;
       });
+    }
+  };
+
+  const playMessageTTS = async (text: string) => {
+    if (!userInfo) return;
+    try {
+      const res = await fetch('/api/v1/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${userInfo.accessToken}`
+        },
+        body: JSON.stringify({ text })
+      });
+
+      if (!res.ok) {
+        throw new Error('TTS request failed');
+      }
+
+      const audioBlob = await res.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      await audio.play();
+    } catch (e) {
+      console.error('Failed to play TTS audio:', e);
     }
   };
 
@@ -507,19 +532,30 @@ export default function Dashboard() {
                   </div>
 
                   {/* Bubble */}
-                  <div
-                    className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                      msg.sender === 'user'
-                        ? 'bg-sky-600/90 text-white rounded-tr-none'
-                        : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
-                    }`}
-                  >
-                    {msg.text || (
-                      <span className="flex items-center gap-1 text-slate-500 text-xs italic">
-                        <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" />
-                        <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce [animation-delay:0.2s]" />
-                        <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce [animation-delay:0.4s]" />
-                      </span>
+                  <div className="flex flex-col gap-1">
+                    <div
+                      className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                        msg.sender === 'user'
+                          ? 'bg-sky-600/90 text-white rounded-tr-none'
+                          : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none shadow-md'
+                      }`}
+                    >
+                      {msg.text || (
+                        <span className="flex items-center gap-1 text-slate-500 text-xs italic">
+                          <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" />
+                          <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce [animation-delay:0.2s]" />
+                          <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce [animation-delay:0.4s]" />
+                        </span>
+                      )}
+                    </div>
+                    {msg.sender === 'assistant' && msg.text && (
+                      <button
+                        onClick={() => playMessageTTS(msg.text)}
+                        className="self-start mt-1 flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-800 hover:border-slate-700 bg-slate-900 hover:bg-slate-850 text-[10px] font-semibold text-sky-400 hover:text-sky-300 transition-all cursor-pointer"
+                        title="Read message aloud"
+                      >
+                        <Volume2 size={12} /> Speak
+                      </button>
                     )}
                   </div>
                 </div>

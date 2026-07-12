@@ -226,3 +226,28 @@ async def chat(
         media_type="text/plain; charset=utf-8",
         headers={"X-Session-ID": session_id}
     )
+
+from pydantic import BaseModel
+from fastapi import Response
+
+class TTSRequest(BaseModel):
+    text: str
+
+@router.post("/tts")
+@router.post("/api/v1/tts")
+async def tts_endpoint(
+    payload: TTSRequest,
+    claims: Dict[str, Any] = Depends(get_current_user_claims)
+):
+    chatbot_rag_url = f"{settings.CHATBOT_RAG_URL}/api/v1/tts"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(chatbot_rag_url, json={"text": payload.text})
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail="TTS generation failed")
+            
+            media_type = resp.headers.get("content-type", "audio/mpeg")
+            return Response(content=resp.content, media_type=media_type)
+    except Exception as e:
+        logger.error(f"Failed to fetch TTS from chatbot-rag: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
