@@ -60,12 +60,17 @@ Before release, verify:
 - [ ] Mock provider modes (`mock` LLM/STT/TTS) disabled.
 - [ ] CORS allowed origins configured to specific production domains.
 - [ ] HTTPS and WSS enforced via Nginx proxy redirects.
+- [ ] REST endpoints securely require `Authorization: Bearer <accessToken>` headers.
 
 ## 6. Release Acceptance Criteria (Gates)
 A release may be tagged `v1.0.0` only if all the following gates are met:
 1. **Automated Verification**: 100% of unit, integration, and security checks (`pytest`, `Bandit`, `pip-audit`) pass.
-2. **E2E Validation**: Flow checks succeed (Upload -> Parse -> Vector search query -> Voice session stream -> Document delete).
-3. **Multi-Tenant Scoping**: Script validation confirms zero leakage of cross-tenant indexes.
-4. **Load Testing**: Response latencies meet target metrics under 100 concurrent loads.
-5. **Rollback Testing**: Complete verification of database migrations and service downgrades from v1.0.1 to v1.0.0.
-6. **Sign-off**: Formal approval from technical lead.
+2. **Playwright E2E Test Success**: The complete voice pipeline test suite succeeds, confirming transcription, retrieval accuracy, and latency recording.
+   ```powershell
+   $env:VOICE_FILE="speech_tech.wav"; npx playwright test e2e/voice.spec.ts
+   ```
+3. **E2E Validation**: Flow checks succeed (Upload -> Parse -> Vector search query -> Voice session stream -> Document delete -> On-demand TTS Speak triggers).
+4. **Multi-Tenant Scoping**: Script validation confirms zero leakage of cross-tenant indexes (verified token claim parsing).
+5. **Load Testing**: Response latencies meet target metrics under 100 concurrent loads.
+6. **Rollback Testing**: Complete verification of database migrations and service downgrades from v1.0.1 to v1.0.0.
+7. **Sign-off**: Formal approval from technical lead.
