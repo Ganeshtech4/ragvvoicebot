@@ -24,37 +24,71 @@ services:
     networks:
       - voice-rag-network
 
-  chatbot-api:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: voice-rag-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - voice-rag-network
+
+  docubot-backend:
     build:
-      context: ./chatbot-api
-      dockerfile: Dockerfile
-    container_name: voice-rag-chatbot-api
+      context: .
+      dockerfile: docubot-backend/Dockerfile
+    container_name: voice-rag-docubot-backend
     environment:
       - PORT=5001
-      - DATABASE_URL=postgresql://voice_rag_user:voice_rag_password@postgres:5432/voice_rag_db
+      - DATABASE_URL=postgresql+asyncpg://voice_rag_user:voice_rag_password@postgres:5432/voice_rag_db
       - REDIS_URL=redis://redis:6379
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-mock}
-      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
-      - LLM_API_KEY=${LLM_API_KEY:-mock}
-      - LLM_API_URL=${LLM_API_URL:-}
-      - LLM_MODEL=${LLM_MODEL:-}
+      - CHATBOT_RAG_URL=http://chatbot-rag:5002
+      - ENVIRONMENT=development
+      - JWT_SECRET=super-secret-production-key-change-me
     ports:
       - "5001:5001"
+    volumes:
+      - ./docubot-backend/storage:/app/storage
     depends_on:
       - postgres
       - redis
     networks:
       - voice-rag-network
 
-  voice-gateway:
+  celery-worker:
     build:
-      context: ./voice-gateway
-      dockerfile: Dockerfile
-    container_name: voice-rag-voice-gateway
+      context: .
+      dockerfile: docubot-backend/Dockerfile
+    container_name: voice-rag-celery-worker
+    command: celery -A app.celery_app.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://voice_rag_user:voice_rag_password@postgres:5432/voice_rag_db
+      - REDIS_URL=redis://redis:6379
+      - CHATBOT_RAG_URL=http://chatbot-rag:5002
+      - JWT_SECRET=super-secret-production-key-change-me
+    volumes:
+      - ./docubot-backend/storage:/app/storage
+    depends_on:
+      - redis
+      - postgres
+      - qdrant
+    networks:
+      - voice-rag-network
+
+  chatbot-rag:
+    build:
+      context: .
+      dockerfile: chatbot-rag/Dockerfile
+    container_name: voice-rag-chatbot-rag
     environment:
       - PORT=5002
-      - CHATBOT_API_URL=http://chatbot-api:5001
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-mock}
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+      - LLM_API_KEY=${LLM_API_KEY:-mock}
+      - LLM_API_URL=${LLM_API_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
       - STT_PROVIDER=${STT_PROVIDER:-mock}
       - STT_API_KEY=${STT_API_KEY:-mock}
       - STT_API_URL=${STT_API_URL:-}
@@ -64,44 +98,24 @@ services:
       - TTS_API_URL=${TTS_API_URL:-}
       - TTS_MODEL=${TTS_MODEL:-}
       - TTS_VOICE=${TTS_VOICE:-}
+      - DOCUBOT_BACKEND_URL=http://docubot-backend:5001
+      - ENVIRONMENT=development
+      - JWT_SECRET=super-secret-production-key-change-me
     ports:
       - "5002:5002"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
-      - chatbot-api
+      - qdrant
+      - docubot-backend
     networks:
       - voice-rag-network
 
   frontend:
     build:
-      context: ./frontend
+      context: ./docubot-frontend
       dockerfile: Dockerfile
     container_name: voice-rag-frontend
     ports:
       - "3000:3000"
-    networks:
-      - voice-rag-network
-
-  whisper-service:
-    build:
-      context: .
-      dockerfile: ./services/whisper-service/Dockerfile
-    container_name: voice-rag-whisper-service
-    ports:
-      - "8001:8001"
-    volumes:
-      - whisper-cache:/root/.cache/huggingface
-    networks:
-      - voice-rag-network
-
-  tts-service:
-    build:
-      context: .
-      dockerfile: ./services/tts-service/Dockerfile
-    container_name: voice-rag-tts-service
-    ports:
-      - "8002:8002"
     networks:
       - voice-rag-network
 
@@ -114,14 +128,14 @@ services:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - frontend
-      - voice-gateway
-      - chatbot-api
+      - chatbot-rag
+      - docubot-backend
     networks:
       - voice-rag-network
 
 volumes:
   pgdata:
-  whisper-cache:
+  qdrant_data:
 
 networks:
   voice-rag-network:

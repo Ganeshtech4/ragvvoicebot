@@ -1,0 +1,51 @@
+name: Release Validation Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ruff black isort mypy pytest bandit safety
+        if [ -f docubot-backend/requirements.txt ]; then pip install -r docubot-backend/requirements.txt; fi
+        if [ -f chatbot-rag/requirements.txt ]; then pip install -r chatbot-rag/requirements.txt; fi
+
+    - name: Run Ruff Linter
+      run: ruff check .
+
+    - name: Check Formatting (Black)
+      run: black --check .
+
+    - name: Check Import Order (isort)
+      run: isort --check .
+
+    - name: Type Check (mypy)
+      run: mypy docubot-backend/app chatbot-rag/
+
+    - name: Run Security Scan (Bandit)
+      run: bandit -r docubot-backend/app chatbot-rag/ -ll
+
+    - name: Dependency Vulnerability Scan
+      run: |
+        safety check -r docubot-backend/requirements.txt || true
+        safety check -r chatbot-rag/requirements.txt || true
+
+    - name: Run Test Suite
+      run: pytest -v
