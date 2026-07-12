@@ -55,7 +55,7 @@ async def synthesize_speech(text: str) -> bytes:
     if provider == "edge-tts":
         try:
             import edge_tts
-            voice = os.getenv("TTS_VOICE", "en-US-EmmaMultilingualNeural")
+            voice = os.getenv("TTS_VOICE") or "en-US-EmmaMultilingualNeural"
             communicate = edge_tts.Communicate(text, voice)
             audio_data = bytearray()
             async for chunk in communicate.stream():
@@ -72,7 +72,7 @@ async def synthesize_speech(text: str) -> bytes:
     api_key = os.getenv("TTS_API_KEY") or os.getenv("OPENAI_API_KEY") or "mock"
     api_url = os.getenv("TTS_API_URL") or "https://api.openai.com/v1/audio/speech"
     model_name = os.getenv("TTS_MODEL", "tts-1")
-    voice_name = os.getenv("TTS_VOICE", "alloy")
+    voice_name = os.getenv("TTS_VOICE") or "alloy"
 
     try:
         import httpx

@@ -91,7 +91,8 @@ async def websocket_endpoint(ws: WebSocket):
                     user_id = claims.get("sub")
 
                     active_session_id = connection_id
-                    session_manager.register(connection_id, ws, tenant_id, user_id, session_id)
+                    session = session_manager.register(connection_id, ws, tenant_id, user_id, session_id)
+                    session.events = ["CONNECTED", "READY"]
                     await ws.send_json({"type": "status", "status": "ready"})
                     logger.info(f"Session registered securely for user {user_id}, tenant {tenant_id}")
 
@@ -108,11 +109,20 @@ async def websocket_endpoint(ws: WebSocket):
                     session.is_processing = True
                     await ws.send_json({"type": "status", "status": "processing"})
 
+                    import time
+                    t_loop_start = time.perf_counter()
+
                     audio_bytes = b"".join(session.audio_chunks)
                     session.audio_chunks = []
 
                     logger.info(f"Processing audio stream ({len(audio_bytes)} bytes)")
+                    
+                    t_asr_start = time.perf_counter()
                     user_transcript = await transcribe_audio(audio_bytes, "audio/webm")
+                    t_asr_end = time.perf_counter()
+                    
+                    stt_ms = int((t_asr_end - t_asr_start) * 1000)
+                    session.events.append("FINAL_TRANSCRIPT")
 
                     if not session.is_processing:
                         logger.info("Session interrupted during STT. Aborting.")
@@ -143,20 +153,29 @@ async def websocket_endpoint(ws: WebSocket):
                     }
 
                     # Propagate WebSocket auth token to API Gateway request
-                    # We can use the mock bypass token or recreate a temporary access token from claims
+                    import time
+                    exp_time = int(time.time() + 3600)
                     claims_payload = {
                         "sub": session.user_id,
                         "username": "ws-session",
                         "tenantId": session.tenant_id,
-                        "role": "user"
+                        "role": "user",
+                        "type": "access",
+                        "exp": exp_time
                     }
-                    # Generate temporary token for gateway authorization
                     temp_token = jwt.encode(claims_payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
                     headers = {"Authorization": f"Bearer {temp_token}"}
 
                     sentence_buffer = ""
                     full_text = ""
                     await ws.send_json({"type": "status", "status": "playing"})
+
+                    qdrant_ms = 0
+                    groq_first_token_ms = 0
+                    groq_total_ms = 0
+                    t_tts_start = time.perf_counter()
+                    t_tts_first = None
+                    total_audio_bytes = 0
 
                     try:
                         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -181,10 +200,18 @@ async def websocket_endpoint(ws: WebSocket):
                                     full_text += chunk
                                     sentence_buffer += chunk
 
+                                    # Prevent streaming metric tags to client transcript
+                                    display_text = chunk
+                                    if "[LATENCY_METRICS]" in display_text or "LATENCY" in display_text:
+                                        continue
+
+                                    if "ASSISTANT_PARTIAL" not in session.events:
+                                        session.events.append("ASSISTANT_PARTIAL")
+
                                     await ws.send_json({
                                         "type": "transcript",
                                         "sender": "assistant",
-                                        "text": chunk,
+                                        "text": display_text,
                                         "isFinal": False
                                     })
 
@@ -193,11 +220,21 @@ async def websocket_endpoint(ws: WebSocket):
                                         sentence = sentence_buffer[last_index:match.end()].strip()
                                         last_index = match.end()
 
+                                        # Strip metrics marker from sentences
+                                        latency_marker = "\n[LATENCY_METRICS]:"
+                                        if latency_marker in sentence:
+                                            sentence = sentence.split(latency_marker)[0].strip()
+
                                         if len(sentence) > 2:
                                             logger.info(f"Synthesizing chunk: '{sentence}'")
                                             try:
                                                 audio_chunk = await synthesize_speech(sentence)
                                                 if session.is_processing:
+                                                    if t_tts_first is None:
+                                                        t_tts_first = time.perf_counter()
+                                                        session.events.append("AUDIO_START")
+                                                    
+                                                    total_audio_bytes += len(audio_chunk)
                                                     base64_audio = base64.b64encode(audio_chunk).decode("utf-8")
                                                     await ws.send_json({
                                                         "type": "audio",
@@ -209,22 +246,89 @@ async def websocket_endpoint(ws: WebSocket):
 
                                     sentence_buffer = sentence_buffer[last_index:]
 
+                        latency_marker = "\n[LATENCY_METRICS]:"
                         if sentence_buffer.strip() and session.is_processing:
-                            logger.info(f"Synthesizing final fragment: '{sentence_buffer}'")
+                            final_sentence = sentence_buffer.split(latency_marker)[0].strip()
+                            if final_sentence:
+                                logger.info(f"Synthesizing final fragment: '{final_sentence}'")
+                                try:
+                                    audio_chunk = await synthesize_speech(final_sentence)
+                                    if t_tts_first is None:
+                                        t_tts_first = time.perf_counter()
+                                        session.events.append("AUDIO_START")
+                                    
+                                    total_audio_bytes += len(audio_chunk)
+                                    base64_audio = base64.b64encode(audio_chunk).decode("utf-8")
+                                    await ws.send_json({
+                                        "type": "audio",
+                                        "data": base64_audio,
+                                        "text": final_sentence
+                                    })
+                                except Exception as synth_err:
+                                    logger.error(f"Failed synthesizing final fragment: {synth_err}")
+
+                        # Extract metrics
+                        if latency_marker in full_text:
+                            parts = full_text.split(latency_marker)
+                            metrics_str = parts[1].strip()
                             try:
-                                audio_chunk = await synthesize_speech(sentence_buffer)
-                                base64_audio = base64.b64encode(audio_chunk).decode("utf-8")
-                                await ws.send_json({
-                                    "type": "audio",
-                                    "data": base64_audio,
-                                    "text": sentence_buffer
-                                })
-                            except Exception as synth_err:
-                                logger.error(f"Failed synthesizing final fragment: {synth_err}")
+                                m_data = json.loads(metrics_str)
+                                qdrant_ms = m_data.get("qdrant_ms", 0)
+                                groq_first_token_ms = m_data.get("groq_first_token_ms", 0)
+                                groq_total_ms = m_data.get("groq_total_ms", 0)
+                            except Exception as e:
+                                logger.error(f"Error parsing latency metrics: {e}")
 
                     except Exception as chat_err:
                         logger.error(f"Error calling API gateway: {chat_err}")
                         await ws.send_json({"type": "error", "message": "Failed to get response from assistant"})
+
+                    t_loop_end = time.perf_counter()
+                    session.events.append("AUDIO_END")
+                    session.events.append("ASSISTANT_FINAL")
+
+                    tts_ms = int((t_loop_end - t_tts_start) * 1000)
+                    total_ms = int((t_loop_end - t_loop_start) * 1000)
+
+                    stats = {
+                        "stt_ms": stt_ms,
+                        "qdrant_ms": qdrant_ms,
+                        "groq_first_token_ms": groq_first_token_ms,
+                        "groq_total_ms": groq_total_ms,
+                        "tts_ms": tts_ms,
+                        "total_ms": total_ms,
+                        "audio_size_bytes": total_audio_bytes
+                    }
+
+                    # Propagate latency to client
+                    await ws.send_json({
+                        "type": "latency",
+                        "stats": stats
+                    })
+
+                    # Write structured session trace and benchmark metrics
+                    try:
+                        import datetime
+                        os.makedirs("benchmarks/voice", exist_ok=True)
+                        session_data = {
+                            "session_id": session.session_id or active_session_id,
+                            "tenant_id": session.tenant_id,
+                            "user_id": session.user_id,
+                            "events": session.events,
+                            "stats": stats,
+                            "timestamp": datetime.datetime.utcnow().isoformat()
+                        }
+                        with open("benchmarks/voice-session.json", "w") as f:
+                            json.dump(session_data, f, indent=2)
+
+                        timestamp_str = datetime.datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
+                        benchmark_path = f"benchmarks/voice/{timestamp_str}_{session_data['session_id']}.json"
+                        with open(benchmark_path, "w") as f:
+                            json.dump(session_data, f, indent=2)
+                        
+                        logger.info(f"Saved session trace and benchmark to benchmarks/voice")
+                    except Exception as log_err:
+                        logger.error(f"Failed to write structured latency log: {log_err}")
 
                     await ws.send_json({
                         "type": "transcript",

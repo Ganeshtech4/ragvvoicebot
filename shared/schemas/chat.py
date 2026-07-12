@@ -7,8 +7,8 @@ class ChatMessageSchema(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    tenantId: str = Field(..., alias="tenantId")
-    userId: str = Field(..., alias="userId")
+    tenantId: Optional[str] = Field(None, alias="tenantId")
+    userId: Optional[str] = Field(None, alias="userId")
     sessionId: Optional[str] = Field(None, alias="sessionId")
 
     class Config:

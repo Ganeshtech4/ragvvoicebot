@@ -9,7 +9,7 @@ logger = logging.getLogger("docubot.adapters.groq")
 class GroqAdapter(BaseAIAdapter):
     def __init__(self, api_key: str = None, model: str = None):
         self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("GROQ_API_KEY") or "mock"
-        self.model = model or os.getenv("LLM_MODEL") or "llama3-8b-8192"
+        self.model = model or os.getenv("LLM_MODEL") or "llama-3.1-8b-instant"
         self.client = AsyncGroq(api_key=self.api_key)
 
     async def stream_chat(

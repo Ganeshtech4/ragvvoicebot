@@ -15,6 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Pre-cache SentenceTransformer model weights at build-time to avoid boot-up network delays
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
+# Pre-cache SpeechBrain ASR model weights at build-time to avoid boot-up network delays
+RUN python -c "from speechbrain.inference.ASR import EncoderDecoderASR; EncoderDecoderASR.from_hparams(source='speechbrain/asr-crdnn-rnnlm-librispeech', savedir='/app/pretrained_models/asr')"
+
 # Copy source and shared libraries
 COPY chatbot-rag/ /app/
 COPY shared/ /app/shared/

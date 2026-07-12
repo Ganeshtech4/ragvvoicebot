@@ -23,9 +23,31 @@ class EmbeddingRequest(BaseModel):
     text: str
 
 async def stream_rag_chat_response(message: str, tenant_id: str, history: List[Dict[str, str]]):
+    import time
+    import json
+
+    t_qdrant_start = time.perf_counter()
     context = await retrieve_context(tenant_id, message)
+    qdrant_ms = int((time.perf_counter() - t_qdrant_start) * 1000)
+
+    t_groq_start = time.perf_counter()
+    t_first_token = None
+
     async for chunk in orchestrate_chat_stream(message, context, history, is_voice=False):
+        if t_first_token is None:
+            t_first_token = time.perf_counter()
         yield chunk
+
+    t_groq_end = time.perf_counter()
+    groq_first_token_ms = int((t_first_token - t_groq_start) * 1000) if t_first_token else 0
+    groq_total_ms = int((t_groq_end - t_groq_start) * 1000)
+
+    metrics = {
+        "qdrant_ms": qdrant_ms,
+        "groq_first_token_ms": groq_first_token_ms,
+        "groq_total_ms": groq_total_ms
+    }
+    yield f"\n[LATENCY_METRICS]:{json.dumps(metrics)}"
 
 @router.post("/rag/stream")
 @router.post("/api/v1/rag/stream")

@@ -12,7 +12,10 @@ class MockAdapter(BaseAIAdapter):
         lower_prompt = prompt.lower()
         context = system_prompt.lower()
         
-        if "password" in lower_prompt or "reset" in lower_prompt:
+        if "title" in context:
+            retrieved_part = system_prompt.split("Retrieved Context:")[-1].strip()
+            responseText = f"According to your documents, here is what I found:\n\n{retrieved_part}\n\nLet me know if you need more details!"
+        elif "password" in lower_prompt or "reset" in lower_prompt:
             responseText = (
                 "To reset your password, you should go to the TechSupport Portal. "
                 "Click on 'Forgot Password' and check your registered email for the link. "
@@ -52,9 +55,6 @@ class MockAdapter(BaseAIAdapter):
                 "foods, added sugars, and saturated fats, and aim to drink at least 8 glasses "
                 "of water a day."
             )
-        elif "title" in context:
-            retrieved_part = system_prompt.split("Retrieved Context:")[-1].strip()
-            responseText = f"According to your documents, here is what I found:\n\n{retrieved_part}\n\nLet me know if you need more details!"
         else:
             responseText = (
                 "Hello! I am your AI assistant. I couldn't find any specific documents "

@@ -76,10 +76,9 @@ def process_document_ingestion(tenant_id: str, doc_id_str: str, file_path: str, 
                 vector = resp.json()["embedding"]
             except Exception as emb_err:
                 logger.error(f"Embedding call failed: {emb_err}")
-                import numpy as np
-                mock_vector = np.zeros(384)
-                mock_vector[0] = float(len(chunk) % 100) / 100.0
-                vector = mock_vector.tolist()
+                vector = [0.0] * 384
+                vector[0] = float(len(chunk) % 100) / 100.0
+
 
             point_id = str(uuid.uuid5(uuid.UUID(doc_id_str), f"chunk-{idx}"))
             points.append(

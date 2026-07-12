@@ -7,6 +7,7 @@ import { AudioQueue } from '../utils/audioQueue';
 interface VoiceInterfaceProps {
   tenantId: string;
   userId: string;
+  token: string;
   sessionId: string | null;
   onSessionCreated: (sessionId: string) => void;
   onAssistantText: (text: string, isFinal: boolean) => void;
@@ -19,6 +20,7 @@ type Status = 'idle' | 'listening' | 'processing' | 'speaking';
 export default function VoiceInterface({
   tenantId,
   userId,
+  token,
   sessionId,
   onSessionCreated,
   onAssistantText,
@@ -60,11 +62,30 @@ export default function VoiceInterface({
     return () => {
       disconnectWebSocket();
     };
-  }, [tenantId, userId]);
+  }, [tenantId, userId, token]);
 
   const connectWebSocket = () => {
     disconnectWebSocket();
     setErrorMsg(null);
+
+    let activeToken = token;
+    if (!activeToken && typeof window !== 'undefined') {
+      const saved = localStorage.getItem('user_session');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          activeToken = parsed.accessToken;
+        } catch (e) {}
+      }
+    }
+
+    if (!activeToken) {
+      console.warn('VoiceInterface: No authentication token found. Please sign out and sign in again.');
+      setErrorMsg('Auth token missing. Please sign out & sign in.');
+      return;
+    }
+
+    console.log(`VoiceInterface: Resolved active token (length: ${activeToken.length}, starts with: ${activeToken.substring(0, 15)}...)`);
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
@@ -76,11 +97,11 @@ export default function VoiceInterface({
 
     ws.onopen = () => {
       setConnected(true);
+      setErrorMsg(null);
       // Initialize gateway session
       ws.send(JSON.stringify({
         type: 'start',
-        tenantId,
-        userId,
+        token: activeToken,
         sessionId
       }));
     };

@@ -15,6 +15,7 @@ interface UserSessionInfo {
   username: string;
   tenantId: string;
   tenantName: string;
+  accessToken: string;
 }
 
 export default function Dashboard() {
@@ -38,7 +39,14 @@ export default function Dashboard() {
     if (savedUser) {
       try {
         const parsed = JSON.parse(savedUser);
-        setUserInfo(parsed);
+        const normalized: UserSessionInfo = {
+          userId: parsed.userId,
+          username: parsed.username,
+          tenantId: parsed.tenantId,
+          tenantName: parsed.tenantName,
+          accessToken: parsed.accessToken || parsed.access_token,
+        };
+        setUserInfo(normalized);
       } catch (e) {
         localStorage.removeItem('user_session');
       }
@@ -63,7 +71,11 @@ export default function Dashboard() {
   const fetchUserSessions = async () => {
     if (!userInfo) return;
     try {
-      const res = await fetch(`/api/sessions/${userInfo.userId}`);
+      const res = await fetch(`/api/v1/sessions/${userInfo.userId}`, {
+        headers: {
+          'Authorization': `Bearer ${userInfo.accessToken}`
+        }
+      });
       if (res.ok) {
         const data = await res.json();
         setSessionsList(data);
@@ -74,8 +86,13 @@ export default function Dashboard() {
   };
 
   const loadSessionMessages = async (id: string) => {
+    if (!userInfo) return;
     try {
-      const res = await fetch(`/api/messages/${id}`);
+      const res = await fetch(`/api/v1/messages/${id}`, {
+        headers: {
+          'Authorization': `Bearer ${userInfo.accessToken}`
+        }
+      });
       if (res.ok) {
         const data = await res.json();
         setSessionId(id);
@@ -95,7 +112,7 @@ export default function Dashboard() {
     setLoadingAuth(true);
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: loginUsername, password: loginPassword })
@@ -106,9 +123,16 @@ export default function Dashboard() {
         throw new Error(err.error || 'Login failed');
       }
 
-      const data: UserSessionInfo = await res.json();
-      setUserInfo(data);
-      localStorage.setItem('user_session', JSON.stringify(data));
+      const rawData = await res.json();
+      const normalizedData: UserSessionInfo = {
+        userId: rawData.userId,
+        username: rawData.username,
+        tenantId: rawData.tenantId,
+        tenantName: rawData.tenantName,
+        accessToken: rawData.accessToken || rawData.access_token,
+      };
+      setUserInfo(normalizedData);
+      localStorage.setItem('user_session', JSON.stringify(normalizedData));
     } catch (err: any) {
       setAuthError(err.message || 'Network error');
     } finally {
@@ -140,9 +164,12 @@ export default function Dashboard() {
     setMessages(prev => [...prev, { sender: 'assistant', text: '', isStreaming: true }]);
 
     try {
-      const res = await fetch('/api/chat', {
+      const res = await fetch('/api/v1/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${userInfo.accessToken}`
+        },
         body: JSON.stringify({
           message: userText,
           tenantId: userInfo.tenantId,
@@ -529,14 +556,17 @@ export default function Dashboard() {
             <p className="text-[10px] text-slate-500 mt-1">Talk naturally with barge-in support</p>
           </div>
           
-          <VoiceInterface
-            tenantId={userInfo.tenantId}
-            userId={userInfo.userId}
-            sessionId={sessionId}
-            onSessionCreated={handleVoiceSessionCreated}
-            onUserText={handleVoiceUserTranscript}
-            onAssistantText={handleVoiceAssistantTranscript}
-          />
+          {userInfo && (
+            <VoiceInterface
+              tenantId={userInfo.tenantId}
+              userId={userInfo.userId}
+              token={userInfo.accessToken}
+              sessionId={sessionId}
+              onSessionCreated={handleVoiceSessionCreated}
+              onUserText={handleVoiceUserTranscript}
+              onAssistantText={handleVoiceAssistantTranscript}
+            />
+          )}
         </section>
 
       </div>

@@ -41,9 +41,9 @@ class QdrantVectorStore(BaseVectorStore):
                     )
                 ]
             )
-            results = await self.client.search(
+            results = await self.client.query_points(
                 collection_name=self.collection_name,
-                query_vector=query_vector,
+                query=query_vector,
                 query_filter=filter_query,
                 limit=top_k
             )
@@ -53,7 +53,7 @@ class QdrantVectorStore(BaseVectorStore):
                     "content": hit.payload.get("content", ""),
                     "score": hit.score
                 }
-                for hit in results
+                for hit in results.points
             ]
         except Exception as e:
             logger.error(f"Qdrant search failed: {e}")

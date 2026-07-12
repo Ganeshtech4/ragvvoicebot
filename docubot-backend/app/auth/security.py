@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from jose import jwt, JWTError
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import logging
 
@@ -45,7 +45,12 @@ def decode_token(token: str) -> Dict[str, Any]:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-def get_current_user_claims(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme)) -> Dict[str, Any]:
+def get_current_user_claims(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme)
+) -> Dict[str, Any]:
+    auth_header = request.headers.get("authorization")
+    logger.info(f"DEBUG AUTH - Header: {auth_header}, Credentials parsed: {credentials}")
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
