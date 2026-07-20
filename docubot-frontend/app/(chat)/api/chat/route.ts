@@ -75,6 +75,15 @@ export async function POST(request: Request) {
 
         const decoder = new TextDecoder();
         let buffer = "";
+        let started = false;
+
+        const ensureStarted = () => {
+          if (!started) {
+            // MUST send text-start before any text-delta
+            writer.write({ type: "text-start", id: messageId });
+            started = true;
+          }
+        };
 
         while (true) {
           const { done, value } = await reader.read();
@@ -82,38 +91,42 @@ export async function POST(request: Request) {
           const chunk = decoder.decode(value, { stream: true });
           buffer += chunk;
 
-          // Check if buffer contains latency metrics
+          // Strip out latency metrics appended by the backend
           if (buffer.includes("[LATENCY_METRICS]:")) {
             const index = buffer.indexOf("[LATENCY_METRICS]:");
             const textPart = buffer.substring(0, index);
             if (textPart) {
-              writer.write({
-                type: "text-delta",
-                id: messageId,
-                delta: textPart,
-              });
+              ensureStarted();
+              writer.write({ type: "text-delta", id: messageId, delta: textPart });
             }
-            
+
             try {
               const metricsStr = buffer.substring(index + "[LATENCY_METRICS]:".length);
               const metrics = JSON.parse(metricsStr.trim());
               writer.write({
                 type: "custom",
                 kind: "metrics.latency",
-                value: { type: "latency", stats: metrics }
+                value: { type: "latency", stats: metrics },
               } as any);
             } catch (e) {
-              // ignore parse errors
+              // ignore parse errors on malformed metrics
             }
             buffer = "";
           } else {
-            // Write normal text chunks to the stream
-            writer.write({
-              type: "text-delta",
-              id: messageId,
-              delta: chunk,
-            });
+            ensureStarted();
+            writer.write({ type: "text-delta", id: messageId, delta: chunk });
           }
+        }
+
+        // Flush any remaining buffer content
+        if (buffer.trim()) {
+          ensureStarted();
+          writer.write({ type: "text-delta", id: messageId, delta: buffer });
+        }
+
+        // Required: signal end of the text part
+        if (started) {
+          writer.write({ type: "text-finish", id: messageId });
         }
       },
     });
