@@ -1,6 +1,8 @@
-# DocuBot Platform Production Architecture Specification
+# DocuBot Platform — Production Architecture Specification
 
-This document details the long-term production architecture, system design, service boundaries, data flows, and security specifications for the DocuBot Voice RAG platform.
+This document details the production architecture, system design, service boundaries, data flows, and security specifications for the DocuBot Voice RAG platform.
+
+> **Last updated**: July 2026 — reflects fullscreen ChatGPT-style voice UI, AudioQueue AnalyserNode integration, and chat route payload normalisation.
 
 ---
 
@@ -25,17 +27,27 @@ graph TD
   - RBAC (Role-Based Access Control) & Tenant Resolution.
   - Rate Limiting (Redis-based sliding window).
   - Chat Session Management & Conversation History Storage.
-  - Document metadata ownership, upload authorization (S3 presigned URLs), and relational database storage.
+  - Document metadata ownership, upload authorisation (S3 presigned URLs), and relational database storage.
   - Client-facing REST endpoints (`/api/v1/auth`, `/api/v1/sessions`, `/api/v1/messages`).
+  - **Dev bypass**: Accepts `mock-guest-token` as a valid guest credential (see `app/auth/security.py`).
 
 ### B. chatbot-rag (AI-Only Orchestration Service)
 - **Role**: High-performance, AI-specific processing engine.
 - **Responsibilities**:
   - WebSocket Streaming gateway (`/ws`) for voice sessions.
-  - Embedded Voice Services (Whisper STT and Edge-TTS) to eliminate extra network hops.
+  - Embedded Voice Services (Whisper STT via Groq, Edge-TTS) to eliminate extra network hops.
   - Embedding generation, prompt building/compiling, and LLM orchestration.
   - Semantic vector retrieval from Qdrant.
-  - **No business logic ownership**: Relies on the gateway for user validation and permissions.
+  - **No business logic ownership**: Relies on docubot-backend for user validation.
+  - **Dev bypass**: Accepts `mock-guest-token`, `mock-tech`, `mock-health` without JWT decode (see `websocket/connection.py`).
+
+### C. docubot-frontend (Next.js 16 UI)
+- **Role**: Browser client — chat interface and voice session controller.
+- **Responsibilities**:
+  - Chat message streaming via AI SDK `DefaultChatTransport`.
+  - **Fullscreen Voice Interface** (`VoiceInterface.tsx`) — ChatGPT-style gradient orb that pulses in real time with both mic input (user) and `AudioQueue.getVolumeLevel()` (assistant).
+  - `AudioQueue` — gapless playback via scheduled `AudioBufferSourceNode` timeline with an `AnalyserNode` wired into the graph to expose live volume levels.
+  - `/api/chat` route normalises two SDK payload shapes (`{message}` and `{messages}`) before forwarding to `docubot-backend`.
 
 ---
 
@@ -123,10 +135,9 @@ sequenceDiagram
     participant STT as Embedded STT (Whisper)
     participant TTS as Embedded TTS (Edge-TTS)
 
-    Mic->>RAG: Establish WS connection (/ws?token=JWT)
-    RAG->>Gateway: Validate Token & Resolve Tenant ID
-    Gateway-->>RAG: Auth Success
-    RAG-->>Mic: Connection Ready
+    Mic->>RAG: Establish WS connection (/ws)
+    RAG->>RAG: Validate token (JWT decode or dev-bypass)
+    RAG-->>Mic: Status: ready
     
     loop Real-time stream (hands-free VAD)
         Mic->>RAG: Send Binary Audio Frame (200ms slice)

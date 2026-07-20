@@ -1,44 +1,42 @@
-# Voice RAG Chatbot Gateway - Developer Guide
+# DocuBot — Developer Guide
 
-This document provides a comprehensive overview of the architecture, codebase structure, configuration variables, and running/testing instructions for the **Multi-Tenant Voice RAG Chatbot**.
+Comprehensive reference for architecture, code structure, configuration, and testing.
 
 ---
 
 ## 1. System Architecture & Flow
-
-The system coordinates real-time audio capture, streaming transcription, RAG database context retrieval, LLM response stream parsing, and sentence-by-sentence text-to-speech generation.
 
 ### End-to-End Execution Flow
 
 ```text
 User speaks
   │
-  ▼ (Client-side MediaRecorder slices audio every 200ms)
-WebSocket Binary Stream (/ws)
+  ▼  (Client-side MediaRecorder slices audio every 200ms)
+WebSocket Binary Stream (/ws → chatbot-rag:5002)
   │
-  ▼ (Voice Gateway collects audio buffer until silence/PTT release)
-STT (Whisper API / Mock Fallback)
+  ▼  (Voice gateway buffers audio until VAD silence / PTT release)
+STT — Groq Whisper-large-v3 (via OpenAI-compatible API)
   │
-  ▼ (Raw Text Transcript generated)
-REST Post Request (/api/chat)
+  ▼  (Raw text transcript)
+REST POST → docubot-backend:5001/api/v1/chat
   │
-  ▼ (Chatbot API receives query + Tenant context ID)
-PostgreSQL RAG Match
+  ▼  (Auth + tenant resolution + session persistence)
+chatbot-rag — Qdrant semantic search (scoped by tenant_id)
   │
-  ▼ (Retrieves isolated documentation matching Tenant ID)
-LLM Streaming API (Gemini / Claude / OpenAI)
+  ▼  (Retrieved context chunks)
+LLM Streaming (Gemini / Claude / OpenAI / custom)
   │
-  ▼ (Streams text response chunks)
+  ▼  (Streamed text tokens)
 Sentence Boundary Detection
   │
-  ▼ (Voice Gateway aggregates text chunks into sentences)
-TTS (OpenAI TTS-1 / Mock Synth Fallback)
+  ▼  (Complete sentences sent to TTS)
+TTS — OpenAI TTS-1 / Edge-TTS (base64 audio frames)
   │
-  ▼ (Generates base64 audio frame for each completed sentence)
-WebSocket Audio Stream
+  ▼  (Sent over WebSocket)
+Client AudioQueue (AnalyserNode → gapless AudioContext playback)
   │
-  ▼ (Client-side AudioQueue schedules gapless playback on AudioContext timeline)
-🔊 AI Speaks response
+  ▼
+🔊 AI speaks + gradient orb pulses in sync
 ```
 
 ---
@@ -47,118 +45,195 @@ WebSocket Audio Stream
 
 ```text
 ragvvoicebot/
-├── .env.example             # Template file showing all configuration options
-├── .env                     # Local environment settings (ignored by Git)
-├── docker-compose.yml       # Orchestrates and links all microservice containers
-├── README.md                # Quickstart instructions
-├── Developer_Guide.md       # This guide
+├── .env.example              # All supported environment variables with descriptions
+├── .env                      # Local secrets (git-ignored)
+├── docker-compose.yml        # Multi-container orchestration
+├── README.md                 # Quick-start guide
+├── Developer_Guide.md        # This document
+├── architecture.md           # Production architecture specification
 │
-├── chatbot-api/             # Chatbot API service (Auth, RAG, LLM calls)
-│   ├── src/
-│   │   ├── db/
-│   │   │   ├── pg.ts        # PostgreSQL database connections
-│   │   │   └── redis.ts     # Redis session tracking client
-│   │   ├── services/
-│   │   │   ├── rag.ts       # RAG context lookup matches (isolated by Tenant)
-│   │   │   └── llm.ts       # Handles streaming response endpoints (Gemini, Claude, OpenAI)
-│   │   └── server.ts        # Express REST API definition
-│   ├── Dockerfile
-│   └── package.json
+├── docubot-frontend/         # Next.js 16 (Turbopack) Chat UI
+│   ├── app/
+│   │   ├── (auth)/
+│   │   │   └── auth.ts               # Auth.js config — guest credentials provider
+│   │   └── (chat)/api/
+│   │       ├── chat/route.ts         # POST handler: normalises {message}/{messages}
+│   │       │                         #   → forwards to docubot-backend stream
+│   │       └── history/route.ts      # Returns paginated {chats, hasMore} for sidebar
+│   ├── components/
+│   │   ├── VoiceInterface.tsx        # Fullscreen ChatGPT-style voice UI
+│   │   │   ├── Gradient orb (pulses with mic + speaker volume via AnalyserNode)
+│   │   │   ├── Bottom control pill (Type input, mute, hang-up)
+│   │   │   └── Hands-free VAD (1.8 s silence → stopRecording)
+│   │   └── chat/
+│   │       ├── shell.tsx             # Mounts VoiceInterface as full-viewport overlay
+│   │       └── sidebar-history.tsx   # Expects {chats: Chat[], hasMore: boolean}
+│   └── lib/
+│       └── audioQueue.ts             # AudioQueue — AnalyserNode-wired gapless playback
+│                                     #   + getVolumeLevel() for real-time orb animation
 │
-├── voice-gateway/           # Voice Streaming Gateway service (STT / TTS / WebSockets)
-│   ├── src/
-│   │   ├── adapters/
-│   │   │   ├── stt.ts       # Transcribes speech (OpenAI Whisper or local rotation)
-│   │   │   └── tts.ts       # Synthesizes speech (OpenAI TTS-1 or retro robotic synth)
-│   │   ├── services/
-│   │   │   └── sessionManager.ts # Manages user audio state
-│   │   └── server.ts        # WebSocket upgrade listener and streaming logic
-│   ├── Dockerfile
-│   └── package.json
+├── docubot-backend/          # FastAPI — Auth, Sessions, Multi-Tenant Business Logic
+│   ├── app/
+│   │   ├── auth/
+│   │   │   └── security.py           # JWT decode — accepts mock-guest-token (dev bypass)
+│   │   └── chat/routes.py            # /api/v1/chat — auth-gated, forwards to chatbot-rag
 │
-├── frontend/                # Next.js Frontend Dashboard (UI / Recorders / Audio Playback)
-│   ├── src/
-│   │   ├── app/
-│   │   │   ├── globals.css  # Global Tailwind styles
-│   │   │   ├── layout.tsx   # Document layout
-│   │   │   └── page.tsx     # Dashboard container (auth gate, tabs, text input)
-│   │   ├── components/
-│   │   │   └── VoiceInterface.tsx # Canvas wave animation, mic capture, and silence detection
-│   │   └── utils/
-│   │       └── audioQueue.ts # Low-latency gapless scheduled audio buffer player
-│   ├── Dockerfile
-│   └── package.json
+├── chatbot-rag/              # FastAPI — AI Orchestration + Voice Gateway
+│   ├── websocket/
+│   │   └── connection.py             # WebSocket /ws endpoint
+│   │       ├── Auth bypass: mock-guest-token, mock-tech, mock-health
+│   │       ├── Audio buffer accumulation + VAD
+│   │       ├── STT transcription call
+│   │       └── TTS sentence synthesis → base64 audio frames
+│   ├── stt/                          # STT adapters (openai / mock)
+│   ├── tts/                          # TTS adapters (openai / edge-tts / mock)
+│   └── rag/                          # Qdrant retrieval + prompt compilation
 │
-└── infra/                   # Configuration configurations for background dependencies
-    ├── db/
-    │   └── init.sql         # Seeds PostgreSQL tables (tenants, users, documents)
-    └── nginx/
-        └── nginx.conf       # Reverse proxy routing rules mapping traffic to port 80
+└── infra/
+    ├── nginx/nginx.conf              # Port 80 reverse proxy → frontend / backend / rag
+    └── db/init.sql                   # PostgreSQL schema + seed (tenants, users, documents)
 ```
 
 ---
 
-## 3. Configuration variables (.env)
+## 3. Environment Variables
 
-Modify the root **`.env`** file to select your providers and plug in API keys.
+Modify the root **`.env`** file. All variables with defaults are optional.
 
-| Variable | Description | Allowed Values |
-| :--- | :--- | :--- |
-| **`LLM_PROVIDER`** | Which LLM service to call for chat answers | `mock`, `gemini`, `anthropic`, `openai`, `custom` |
-| **`LLM_API_KEY`** | API authorization key for the chosen LLM | *Your API Key* |
-| **`LLM_API_URL`** | Custom endpoint (only for `custom` OpenAI-compatible) | *e.g., http://localhost:11434/v1/chat/completions* |
-| **`LLM_MODEL`** | Model tag requested | *e.g., `gemini-2.5-flash`, `claude-3-5-sonnet-latest`, `gpt-4o-mini`* |
-| **`STT_PROVIDER`** | Speech-to-Text transcription provider | `mock`, `openai`, `custom` |
-| **`STT_API_KEY`** | Authorization key for STT | *Your API Key* |
-| **`STT_API_URL`** | Custom STT endpoint (if not using OpenAI) | *e.g., custom Whisper API URL* |
-| **`STT_MODEL`** | Model tag for transcription | *e.g., `whisper-1`* |
-| **`TTS_PROVIDER`** | Text-to-Speech audio synthesizer | `mock`, `openai`, `custom` |
-| **`TTS_API_KEY`** | Authorization key for TTS | *Your API Key* |
-| **`TTS_API_URL`** | Custom TTS endpoint | *e.g., custom speech generator URL* |
-| **`TTS_MODEL`** | Model tag for audio synthesis | *e.g., `tts-1`* |
-| **`TTS_VOICE`** | Model voice signature | `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer` |
+### Auth & Security
+
+| Variable | Description | Default |
+|---|---|---|
+| `AUTH_SECRET` | Auth.js session encryption secret | *(required)* |
+| `JWT_SECRET` | Shared JWT signing key for backend ↔ voice gateway | `super-secret-...` |
+
+### LLM Provider
+
+| Variable | Description | Values |
+|---|---|---|
+| `LLM_PROVIDER` | Which LLM to call | `mock` \| `gemini` \| `anthropic` \| `openai` \| `custom` |
+| `LLM_API_KEY` | API key | — |
+| `LLM_API_URL` | Custom endpoint (for `custom`) | — |
+| `LLM_MODEL` | Model tag | `gemini-2.5-flash`, `gpt-4o-mini`, etc. |
+
+### STT (Speech-to-Text)
+
+| Variable | Description | Values |
+|---|---|---|
+| `STT_PROVIDER` | Transcription provider | `mock` \| `openai` |
+| `STT_API_KEY` | API key (Groq or OpenAI) | — |
+| `STT_API_URL` | Endpoint URL | `https://api.groq.com/openai/v1/audio/transcriptions` |
+| `STT_MODEL` | Whisper model | `whisper-large-v3`, `whisper-1` |
+
+> **Recommended**: Use Groq for STT — it is free, extremely fast, and fully OpenAI-compatible. Set `STT_PROVIDER=openai`, `STT_API_URL=https://api.groq.com/openai/v1/audio/transcriptions`, and `STT_MODEL=whisper-large-v3`.
+
+### TTS (Text-to-Speech)
+
+| Variable | Description | Values |
+|---|---|---|
+| `TTS_PROVIDER` | Speech synthesizer | `mock` \| `openai` \| `custom` |
+| `TTS_API_KEY` | API key | — |
+| `TTS_VOICE` | Voice | `alloy` \| `echo` \| `fable` \| `onyx` \| `nova` \| `shimmer` |
 
 ---
 
 ## 4. Running the Application
 
-### Steps
+### One-Command Start
 
-1. **Verify Docker Status**: Make sure Docker Desktop is launched and running.
-2. **Build and Run**: In your terminal at `E:\temp\bindu`, run:
-   ```bash
-   docker-compose up --build
-   ```
-   *This command fetches external PostgreSQL/Redis images, builds the Next.js, Voice Gateway, and Chatbot API node modules inside containers, mounts the database storage volumes, and links them via Nginx.*
-3. **Access application**:
-   Open browser and go to `http://localhost`.
+```bash
+docker compose up --build
+```
+
+Access at `http://localhost:3000`.
+
+### Restart a Single Service
+
+```bash
+docker compose restart frontend       # Next.js
+docker compose restart backend        # FastAPI
+docker compose restart chatbot-rag    # Voice gateway
+```
 
 ---
 
-## 5. Verification & Testing Playbook
+## 5. Development Mode Auth (Mock Tokens)
 
-Here is how to demonstrate and verify each feature:
+For local development, the system ships with two auth bypass layers:
 
-### Feature A: Multi-Tenant RAG Isolation
-1. Go to the login screen at `http://localhost`.
-2. Click **TechSupport Corp** (signs in username: `techuser`, tenant: `tenant-tech`).
-3. Ask (via voice or text): *"How do I reset my password?"* or *"What is the VPN?"*
-4. **Expected Result**: The response fetches context from the TechSupport knowledge base and answers correctly.
-5. Log out and sign in as **HealthAdvice Inc** (username: `healthuser`, tenant: `tenant-health`).
-6. Ask the same question: *"What is the VPN?"*
-7. **Expected Result**: The chatbot will respond that it cannot find any matching documentation. (This is because the RAG queries are restricted solely to the logged-in user's tenant).
-8. Now ask HealthAdvice: *"How do I treat the flu?"* or *"What is the cancelation policy?"*
-9. **Expected Result**: The chatbot retrieves context from the HealthAdvice health portal and answers.
+### A. Next.js Guest Login (`docubot-frontend/app/(auth)/auth.ts`)
+The "Login as Guest" button issues a session with `accessToken = "mock-guest-token"`.
 
-### Feature B: Hands-Free Voice Conversation
-1. Select the **Hands-Free** toggle switch in the Voice Control Hub.
-2. Click the microphone button and grant permission.
-3. Speak your question.
-4. **Expected Result**: As you speak, the canvas waveform will bounce. Once you stop speaking for 1.8 seconds, the client-side Silence Detector will automatically stop recording, freeze the visualizer, and transmit the audio chunk.
-5. The AI response is generated, transcribed, and spoken.
-6. **Expected Result**: Immediately after the voice response finishes playing, the frontend automatically resumes recording, enabling a fluid, hands-free conversational loop.
+### B. FastAPI Backend (`docubot-backend/app/auth/security.py`)
+`mock-guest-token` is decoded into:
+```json
+{ "sub": "a0eebc99-...", "tenantId": "tenant-tech", "role": "guest" }
+```
 
-### Feature C: Assistant Interruption (Barge-In)
-1. Initiate a voice conversation.
-2. While the AI is actively speaking a long answer, start speaking or click the **Interrupt Assistant** button.
-3. **Expected Result**: The browser's audio queue immediately stops, clearing all pending buffers in the `AudioContext` timeline. The Voice Gateway cancels further sentence generation to conserve network resources.
+### C. Voice WebSocket Gateway (`chatbot-rag/websocket/connection.py`)
+The following token strings bypass JWT verification:
+
+| Token | Claims |
+|---|---|
+| `mock-guest-token`, `mock-guest` | tenant-tech, role=guest |
+| `mock-tech` | tenant-tech, role=user |
+| `mock-health` | tenant-health, role=user |
+
+> ⚠️ **These bypasses must be disabled or gated behind `NODE_ENV !== "production"` before any public deployment.**
+
+---
+
+## 6. Voice Interface — Implementation Notes
+
+### VoiceInterface.tsx
+- Fullscreen overlay (`fixed inset-0`) — completely replaces the old popup modal.
+- Orb animation uses `requestAnimationFrame` to poll `AnalyserNode` every frame:
+  - While listening → reads user mic RMS volume via the `analyserRef`.
+  - While speaking → reads assistant audio RMS via `AudioQueue.getVolumeLevel()`.
+  - While idle → gentle sinusoidal breathing animation.
+- Mic button (`handleMicButton`) has three states:
+  - **Recording** → click to mute.
+  - **Muted** → click to unmute + restart.
+  - **Idle / error** → click to retry `startRecording()` (handles post-permission-grant retry).
+
+### AudioQueue.ts
+- New `analyser: AnalyserNode` wired into the assistant playback graph.
+- New `getVolumeLevel(): number` — returns RMS of currently playing assistant audio.
+- All sources now route: `source → analyser → destination`.
+
+### chat/route.ts — Payload Normalisation
+The AI SDK `DefaultChatTransport` sends two different body shapes:
+- Normal message: `{ message: {...}, id }` (singular)
+- Tool continuation: `{ messages: [...], id }` (plural)
+
+The route normalises both into a `messages[]` array. All error responses return `Response.json(...)` to prevent `"Unexpected token 'C'..."` parse errors in the browser.
+
+---
+
+## 7. Testing Playbook
+
+### Feature A: Text Chat
+1. Open `http://localhost:3000` → Login as Guest.
+2. Type any message and press Enter.
+3. **Expected**: Assistant streams a response from the RAG knowledge base.
+
+### Feature B: Voice Interface
+1. Click the microphone icon in the chat input bar.
+2. **Expected**: Fullscreen voice interface opens with the pulsing gradient orb.
+3. Grant microphone permission when prompted.
+4. Speak a question. After 1.8 s of silence, the orb transitions to "Thinking..." state.
+5. **Expected**: Assistant speaks the response; the orb pulses in sync with the audio.
+6. Click the black ✕ button to close the voice session.
+
+### Feature C: Multi-Tenant RAG Isolation
+1. Log in as Guest (maps to `tenant-tech`).
+2. Ask: *"What is the VPN?"*  
+   **Expected**: Correct answer from TechSupport knowledge base.
+3. Ask: *"How do I treat the flu?"*  
+   **Expected**: Chatbot says no matching documents found (health KB not accessible).
+
+### Feature D: Mic Error Recovery
+1. Open the voice interface with mic permission denied.
+2. **Expected**: Red banner shows *"No microphone found"* or *"Access denied"* with specific guidance.
+3. Grant permission in browser settings, click the red mic button.
+4. **Expected**: Recording starts immediately without reopening the interface.

@@ -80,6 +80,12 @@ async def websocket_endpoint(ws: WebSocket):
                                 "sub": "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
                                 "role": "user"
                             }
+                        elif token in ("mock-guest-token", "mock-guest"):
+                            claims = {
+                                "tenantId": "tenant-tech",
+                                "sub": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+                                "role": "guest"
+                            }
                         else:
                             claims = decode_ws_token(token)
                     except Exception as auth_err:
