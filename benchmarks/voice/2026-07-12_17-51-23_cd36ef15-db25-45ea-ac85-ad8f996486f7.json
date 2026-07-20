@@ -1,0 +1,24 @@
+{
+  "session_id": "cd36ef15-db25-45ea-ac85-ad8f996486f7",
+  "tenant_id": "tenant-tech",
+  "user_id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+  "events": [
+    "CONNECTED",
+    "READY",
+    "FINAL_TRANSCRIPT",
+    "ASSISTANT_PARTIAL",
+    "AUDIO_START",
+    "AUDIO_END",
+    "ASSISTANT_FINAL"
+  ],
+  "stats": {
+    "stt_ms": 14727,
+    "qdrant_ms": 8142,
+    "groq_first_token_ms": 351,
+    "groq_total_ms": 542,
+    "tts_ms": 21009,
+    "total_ms": 35751,
+    "audio_size_bytes": 169344
+  },
+  "timestamp": "2026-07-12T17:51:23.117656"
+}

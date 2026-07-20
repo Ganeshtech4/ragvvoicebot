@@ -117,10 +117,11 @@ services:
     build:
       context: ./docubot-frontend
       dockerfile: Dockerfile
-    container_name: voice-rag-frontend
+    container_name: voice-rag-frontend-app
     command: npm run dev
     environment:
       - NEXT_PUBLIC_API_URL=http://docubot-backend:5001
+      - AUTH_SECRET=${AUTH_SECRET}
     volumes:
       - ./docubot-frontend:/app
       - /app/node_modules
@@ -131,7 +132,7 @@ services:
 
   nginx:
     image: nginx:alpine
-    container_name: voice-rag-nginx
+    container_name: voice-rag-nginx-app
     ports:
       - "80:80"
     volumes:

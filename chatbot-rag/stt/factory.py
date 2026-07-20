@@ -2,8 +2,6 @@ import os
 import logging
 from stt.base import BaseSTTAdapter
 from stt.mock import MockSTTAdapter
-from stt.speechbrain import SpeechBrainSTTAdapter
-from stt.faster_whisper import FasterWhisperSTTAdapter
 from stt.openai import OpenAISTTAdapter
 
 logger = logging.getLogger("docubot.stt.factory")
@@ -16,8 +14,10 @@ def get_stt_adapter() -> BaseSTTAdapter:
         provider = os.getenv("STT_PROVIDER", "mock").lower()
         logger.info(f"Instantiating STT provider: {provider}")
         if provider == "speechbrain":
+            from stt.speechbrain import SpeechBrainSTTAdapter
             _stt_adapter = SpeechBrainSTTAdapter()
         elif provider == "faster-whisper":
+            from stt.faster_whisper import FasterWhisperSTTAdapter
             _stt_adapter = FasterWhisperSTTAdapter()
         elif provider == "openai":
             _stt_adapter = OpenAISTTAdapter()

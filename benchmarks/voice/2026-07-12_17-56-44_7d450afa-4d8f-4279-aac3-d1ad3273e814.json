@@ -1,0 +1,24 @@
+{
+  "session_id": "7d450afa-4d8f-4279-aac3-d1ad3273e814",
+  "tenant_id": "tenant-health",
+  "user_id": "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+  "events": [
+    "CONNECTED",
+    "READY",
+    "FINAL_TRANSCRIPT",
+    "ASSISTANT_PARTIAL",
+    "AUDIO_START",
+    "AUDIO_END",
+    "ASSISTANT_FINAL"
+  ],
+  "stats": {
+    "stt_ms": 7678,
+    "qdrant_ms": 112,
+    "groq_first_token_ms": 234,
+    "groq_total_ms": 320,
+    "tts_ms": 12671,
+    "total_ms": 20351,
+    "audio_size_bytes": 111312
+  },
+  "timestamp": "2026-07-12T17:56:44.566654"
+}

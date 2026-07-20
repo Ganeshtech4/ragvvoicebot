@@ -1,16 +1,54 @@
+import { withBotId } from "botid/next/config";
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  async rewrites() {
-    const apiTarget = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5001";
+const basePath = process.env.IS_DEMO === "1" ? "/demo" : "";
 
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${apiTarget}/api/:path*`,
-      },
-    ];
+const nextConfig: NextConfig = {
+  ...(basePath
+    ? {
+        assetPrefix: "/demo-assets",
+        basePath,
+        redirects: async () => [
+          {
+            basePath: false,
+            destination: basePath,
+            permanent: false,
+            source: "/",
+          },
+        ],
+      }
+    : {}),
+  cacheComponents: true,
+  devIndicators: false,
+  env: {
+    NEXT_PUBLIC_BASE_PATH: basePath,
   },
+  experimental: {
+    appNewScrollHandler: true,
+    cachedNavigations: true,
+    inlineCss: true,
+    prefetchInlining: true,
+    turbopackFileSystemCacheForDev: true,
+  },
+  images: {
+    remotePatterns: [
+      {
+        hostname: "avatar.vercel.sh",
+      },
+      {
+        hostname: "*.public.blob.vercel-storage.com",
+        protocol: "https",
+      },
+    ],
+  },
+  logging: {
+    fetches: {
+      fullUrl: false,
+    },
+    incomingRequests: false,
+  },
+  poweredByHeader: false,
+  reactCompiler: true,
 };
 
-export default nextConfig;
+export default withBotId(nextConfig);
